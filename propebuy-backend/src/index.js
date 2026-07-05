@@ -1,16 +1,14 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 
-dotenv.config();
+import { CLIENT_URL, PORT } from "./config/env.js";
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: CLIENT_URL,
     credentials: true,
   }),
 );
