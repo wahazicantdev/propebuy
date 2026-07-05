@@ -28,5 +28,5 @@ app.get("/", (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`PropeBuy backend running on port ${PORT}`);
+  console.log(`PropeBuy backend running on port http://localhost:${PORT}`);
 });
