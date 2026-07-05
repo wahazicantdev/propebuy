@@ -13,3 +13,135 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum Role {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum AccountStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum OrderStatus {
+  RESERVED
+  PROCESSING
+  FULFILLED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  GCASH
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum DeliveryType {
+  PICKUP
+  DELIVERY
+}
+
+model User {
+  id                Int           @id @default(autoincrement())
+  name              String
+  email             String        @unique
+  password          String
+  role              Role
+  accountStatus     AccountStatus @default(PENDING)
+  barangayId        Int?
+  idDocumentUrl     String?
+  certDocumentUrl   String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  barangay          Barangay?     @relation(fields: [barangayId], references: [id])
+  products          Product[]
+  orders            Order[]
+
+  @@map("users")
+}
+
+model Barangay {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  city      String    @default("Muntinlupa City")
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  users     User[]
+  products  Product[]
+
+  @@map("barangays")
+}
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  products  Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          Int       @id @default(autoincrement())
+  sellerId    Int
+  barangayId  Int
+  categoryId  Int
+  name        String
+  description String?
+  price       Decimal   @db.Decimal(10, 2)
+  stock       Int       @default(0)
+  imageUrl    String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  seller      User      @relation(fields: [sellerId], references: [id])
+  barangay    Barangay  @relation(fields: [barangayId], references: [id])
+  category    Category  @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+
+  @@map("products")
+}
+
+model Order {
+  id            Int           @id @default(autoincrement())
+  buyerId       Int
+  status        OrderStatus   @default(RESERVED)
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus @default(PENDING)
+  deliveryType  DeliveryType
+  totalAmount   Decimal       @db.Decimal(10, 2)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  buyer         User          @relation(fields: [buyerId], references: [id])
+  orderItems    OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id         Int      @id @default(autoincrement())
+  orderId    Int
+  productId  Int
+  quantity   Int
+  price      Decimal  @db.Decimal(10, 2)
+  createdAt  DateTime @default(now())
+
+  order      Order    @relation(fields: [orderId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
