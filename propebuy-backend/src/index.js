@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import "express-async-errors";
 
 import { CLIENT_URL, PORT } from "./config/env.js";
 import { errorHandler } from "./middleware/error.middleware.js";

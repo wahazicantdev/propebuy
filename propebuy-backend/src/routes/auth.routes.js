@@ -3,12 +3,12 @@ import { register, login, getMe } from "../controllers/auth.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { uploadDocuments } from "../config/cloudinary.js";
 
-const router = Router();
+const authRoutes = Router();
 
 // Public routes — no token needed
 // uploadDocuments.fields() tells multer to expect
 // two file fields — idDocument and certDocument
-router.post(
+authRoutes.post(
   "/register",
   uploadDocuments.fields([
     { name: "idDocument", maxCount: 1 },
@@ -17,9 +17,9 @@ router.post(
   register,
 );
 
-router.post("/login", login);
+authRoutes.post("/login", login);
 
 // Protected route — token required
-router.get("/me", protect, getMe);
+authRoutes.get("/me", protect, getMe);
 
-export default router;
+export default authRoutes;
