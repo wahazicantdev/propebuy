@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { register, login, getMe } from "../controllers/auth.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
-import { uploadDocuments } from "../config/cloudinary.js";
+import { upload } from "../config/cloudinary.js";
 
 const authRoutes = Router();
 
@@ -10,7 +10,7 @@ const authRoutes = Router();
 // two file fields — idDocument and certDocument
 authRoutes.post(
   "/register",
-  uploadDocuments.fields([
+  upload.fields([
     { name: "idDocument", maxCount: 1 },
     { name: "certDocument", maxCount: 1 },
   ]),

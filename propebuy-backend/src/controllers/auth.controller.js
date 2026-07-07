@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../config/prismaClient.js";
+import { uploadToCloudinary } from "../config/cloudinary.js";
 import { JWT_SECRET, JWT_EXPIRES_IN } from "../config/env.js";
 
 // ── REGISTER ──────────────────────────────────────────
@@ -15,8 +16,7 @@ export const register = async (req, res) => {
     });
   }
 
-  // Validate role — only BUYER or SELLER can register
-  // ADMIN accounts are created manually
+  // Validate role
   if (!["BUYER", "SELLER"].includes(role)) {
     return res.status(400).json({
       success: false,
@@ -37,7 +37,6 @@ export const register = async (req, res) => {
   }
 
   // Check if documents were uploaded
-  // req.files is provided by multer after uploading to Cloudinary
   if (!req.files?.idDocument || !req.files?.certDocument) {
     return res.status(400).json({
       success: false,
@@ -45,9 +44,17 @@ export const register = async (req, res) => {
     });
   }
 
-  // Get Cloudinary URLs from uploaded files
-  const idDocumentUrl = req.files.idDocument[0].path;
-  const certDocumentUrl = req.files.certDocument[0].path;
+  // Upload both documents to Cloudinary manually
+  // uploadToCloudinary takes the file buffer from memory storage
+  const idUpload = await uploadToCloudinary(
+    req.files.idDocument[0].buffer,
+    "documents",
+  );
+
+  const certUpload = await uploadToCloudinary(
+    req.files.certDocument[0].buffer,
+    "documents",
+  );
 
   // Hash password
   const salt = await bcrypt.genSalt(10);
@@ -61,8 +68,8 @@ export const register = async (req, res) => {
       password: hashedPassword,
       role,
       barangayId: barangayId ? parseInt(barangayId) : null,
-      idDocumentUrl,
-      certDocumentUrl,
+      idDocumentUrl: idUpload.secure_url,
+      certDocumentUrl: certUpload.secure_url,
       accountStatus: "PENDING",
     },
   });
@@ -91,7 +98,6 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   const { email, password } = req.body;
 
-  // Validate required fields
   if (!email || !password) {
     return res.status(400).json({
       success: false,
@@ -99,7 +105,6 @@ export const login = async (req, res) => {
     });
   }
 
-  // Find user by email
   const user = await prisma.user.findUnique({
     where: { email },
   });
@@ -111,7 +116,6 @@ export const login = async (req, res) => {
     });
   }
 
-  // Compare password
   const isPasswordValid = await bcrypt.compare(password, user.password);
 
   if (!isPasswordValid) {
@@ -121,7 +125,6 @@ export const login = async (req, res) => {
     });
   }
 
-  // Generate JWT token
   const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
@@ -142,7 +145,6 @@ export const login = async (req, res) => {
 
 // ── GET CURRENT USER ───────────────────────────────────
 export const getMe = async (req, res) => {
-  // req.user is set by the auth middleware
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
     select: {
