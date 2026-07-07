@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 
 import { CLIENT_URL, PORT } from "./config/env.js";
+import { errorHandler } from "./middleware/error.middleware.js";
+import authRoutes from "./routes/auth.routes.js";
 
 const app = express();
 
@@ -16,6 +18,9 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Routes
+app.use("/api/auth", authRoutes);
+
 // Health check route
 app.get("/", (req, res) => {
   res.json({
@@ -23,6 +28,9 @@ app.get("/", (req, res) => {
     status: "OK",
   });
 });
+
+// Error handler — must be last
+app.use(errorHandler);
 
 // Start server
 app.listen(PORT, () => {
