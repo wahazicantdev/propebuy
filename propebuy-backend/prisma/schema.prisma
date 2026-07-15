@@ -70,17 +70,19 @@ model Product {
 }
 
 model Order {
-  id            Int           @id @default(autoincrement())
-  buyerId       Int
-  status        OrderStatus   @default(RESERVED)
-  paymentMethod PaymentMethod
-  paymentStatus PaymentStatus @default(PENDING)
-  deliveryType  DeliveryType
-  totalAmount   Decimal       @db.Decimal(10, 2)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  orderItems    OrderItem[]
-  buyer         User          @relation(fields: [buyerId], references: [id])
+  id              Int           @id @default(autoincrement())
+  buyerId         Int
+  status          OrderStatus   @default(RESERVED)
+  paymentMethod   PaymentMethod
+  paymentStatus   PaymentStatus @default(PENDING)
+  deliveryType    DeliveryType
+  totalAmount     Decimal       @db.Decimal(10, 2)
+  paymongoLinkId  String?       // PayMongo link ID for GCash tracking
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  buyer           User          @relation(fields: [buyerId], references: [id])
+  orderItems      OrderItem[]
 
   @@map("orders")
 }

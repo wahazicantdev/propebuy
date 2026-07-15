@@ -1,12 +1,15 @@
 import prisma from "../config/prismaClient.js";
+import {
+  createGCashPaymentLink,
+  verifyPaymentStatus,
+} from "../utils/paymongo.helper.js";
 
 // ── CHECKOUT — THE TPS CORE ────────────────────────────
-// This is where BEGIN, FOR UPDATE, COMMIT, ROLLBACK happens
+// Handles atomic order processing with optional GCash payment
 export const checkout = async (req, res) => {
   const { items, paymentMethod, deliveryType } = req.body;
-  // items = [{ productId: 1, quantity: 2 }, { productId: 3, quantity: 1 }]
 
-  // Validate required fields
+  // Validate required fields before opening transaction
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({
       success: false,
@@ -28,10 +31,9 @@ export const checkout = async (req, res) => {
     });
   }
 
-  // ── THE ATOMIC TRANSACTION ─────────────────────────
-  // Everything inside here is ONE atomic unit
-  // Either ALL succeed → COMMIT
-  // Or ANY fails → automatic ROLLBACK
+  // ── ATOMIC TRANSACTION ─────────────────────────────
+  // All database operations here are ONE unit
+  // Any failure = automatic ROLLBACK
   const order = await prisma.$transaction(async (tx) => {
     let totalAmount = 0;
     const validatedItems = [];
@@ -44,11 +46,10 @@ export const checkout = async (req, res) => {
         throw new Error("Invalid item — productId and quantity are required");
       }
 
-      // ── STEP 1: LOCK THE ROW ─────────────────────
-      // SELECT FOR UPDATE locks this specific product row
-      // No other transaction can touch this row
-      // until our transaction commits or rolls back
-      // This is what prevents double-selling
+      // ── LOCK THE ROW — PREVENTS DOUBLE SELLING ────
+      // FOR UPDATE locks this product row
+      // No concurrent transaction can read or modify it
+      // until this transaction commits or rolls back
       const lockedProduct = await tx.$queryRaw`
         SELECT id, name, stock, price
         FROM products
@@ -57,17 +58,16 @@ export const checkout = async (req, res) => {
         FOR UPDATE
       `;
 
-      // Product not found
+      // Product not found after lock attempt
       if (!lockedProduct || lockedProduct.length === 0) {
         throw new Error(`Product with ID ${productId} not found`);
       }
 
       const product = lockedProduct[0];
 
-      // ── STEP 2: CHECK STOCK ──────────────────────
-      // If stock is insufficient → throw error
-      // Throwing inside $transaction = automatic ROLLBACK
-      // Lock is released, nothing is saved
+      // ── STOCK CHECK ───────────────────────────────
+      // If stock is insufficient — throw triggers ROLLBACK
+      // Nothing is saved, lock is released
       if (product.stock < quantity) {
         throw new Error(
           `Insufficient stock for "${product.name}". ` +
@@ -75,18 +75,19 @@ export const checkout = async (req, res) => {
         );
       }
 
-      // ── STEP 3: DEDUCT STOCK ─────────────────────
-      // Atomic decrement — safe even under concurrent requests
-      // Because the row is locked — no race condition possible
+      // ── ATOMIC STOCK DEDUCTION ────────────────────
+      // decrement is atomic at the database level
+      // Safe against race conditions because row is locked
       await tx.product.update({
         where: { id: parseInt(productId) },
         data: { stock: { decrement: quantity } },
       });
 
-      // Calculate item total
+      // Accumulate total amount
       const itemTotal = parseFloat(product.price) * quantity;
       totalAmount += itemTotal;
 
+      // Store validated item for order creation
       validatedItems.push({
         productId: parseInt(productId),
         quantity,
@@ -94,21 +95,22 @@ export const checkout = async (req, res) => {
       });
     }
 
-    // ── STEP 4: CREATE ORDER RECORD ───────────────
+    // ── CREATE ORDER RECORD ───────────────────────
     // Only reached if ALL items passed stock check
     const newOrder = await tx.order.create({
       data: {
         buyerId: req.user.id,
         status: "RESERVED",
         paymentMethod,
-        paymentStatus: paymentMethod === "CASH" ? "PENDING" : "PENDING",
+        paymentStatus: "PENDING",
         deliveryType,
         totalAmount,
       },
     });
 
-    // ── STEP 5: CREATE ORDER ITEMS ────────────────
-    // Link each product to the order
+    // ── CREATE ORDER ITEMS ────────────────────────
+    // Link each product to the order record
+    // createMany inserts all items in one query — efficient
     await tx.orderItem.createMany({
       data: validatedItems.map((item) => ({
         orderId: newOrder.id,
@@ -118,9 +120,9 @@ export const checkout = async (req, res) => {
       })),
     });
 
-    // ── STEP 6: RETURN ORDER ──────────────────────
-    // All steps passed → Prisma auto-COMMITS
-    // Return the complete order with items
+    // ── FETCH COMPLETE ORDER WITH RELATIONS ───────
+    // Get full order data to return in response
+    // and to use for PayMongo payment link creation
     return await tx.order.findUnique({
       where: { id: newOrder.id },
       include: {
@@ -144,24 +146,45 @@ export const checkout = async (req, res) => {
         },
       },
     });
-  }); // ← If ANY step above threw an error → auto ROLLBACK
 
-  // ── AFTER COMMIT ───────────────────────────────
-  // PayMongo is called OUTSIDE the transaction
-  // Because external API calls should never be inside
-  // an atomic transaction — network failures would
-  // cause unnecessary rollbacks
+    // ── PRISMA AUTO-COMMITS HERE ──────────────────
+    // All steps passed — changes are permanently saved
+  });
+
+  // ── AFTER COMMIT — GCASH PAYMENT ──────────────────
+  // PayMongo is called OUTSIDE the transaction intentionally
+  // External API calls should never be inside atomic transactions
+  // Network failures would cause unnecessary rollbacks
   if (order.paymentMethod === "GCASH") {
-    // We will add PayMongo here in Phase 5
+    // Create GCash payment link via PayMongo
+    const payment = await createGCashPaymentLink(
+      order.totalAmount,
+      order.id,
+      `PropeBuy Order #${order.id} — ${order.orderItems.length} item(s)`,
+    );
+
+    // Save PayMongo link ID to order for webhook tracking
+    // When PayMongo sends webhook — we use this to find the order
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        // Store PayMongo reference for webhook lookup
+        // We will add paymongoLinkId field to schema next
+        paymongoLinkId: payment.linkId,
+      },
+    });
+
+    // Return order data + GCash payment URL
     return res.status(201).json({
       success: true,
-      message: "Order placed. Redirecting to GCash payment...",
+      message: "Order placed. Please complete your GCash payment.",
       data: order,
-      paymentUrl: null, // Phase 5 will fill this
+      paymentUrl: payment.checkoutUrl,
     });
   }
 
-  // Cash payment — order is complete
+  // ── CASH PAYMENT — ORDER COMPLETE ─────────────────
+  // No payment gateway needed — cash on pickup or delivery
   res.status(201).json({
     success: true,
     message: "Order placed successfully. Please prepare your cash payment.",
@@ -169,7 +192,69 @@ export const checkout = async (req, res) => {
   });
 };
 
+// ── PAYMONGO WEBHOOK HANDLER ───────────────────────────
+// PayMongo calls this endpoint when buyer completes GCash payment
+// This is how our backend knows the payment was successful
+export const handlePaymongoWebhook = async (req, res) => {
+  try {
+    // Get the PayMongo signature from request headers
+    // Used to verify the webhook is genuinely from PayMongo
+    const signature = req.headers["paymongo-signature"];
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing PayMongo signature",
+      });
+    }
+
+    // Parse the webhook event data
+    // req.body contains the payment event from PayMongo
+    const event = req.body;
+    const eventType = event.data?.attributes?.type;
+
+    // We only care about successful payment events
+    // PayMongo sends different event types — we filter for payment success
+    if (eventType === "payment.paid") {
+      // Get the payment details from the webhook
+      const paymentData = event.data.attributes.data;
+      const referenceNumber = paymentData?.attributes?.source?.reference_number;
+
+      // Find the order with this PayMongo reference
+      // This is why we saved the linkId on the order earlier
+      const order = await prisma.order.findFirst({
+        where: {
+          paymongoLinkId: { not: null },
+          paymentStatus: "PENDING",
+        },
+      });
+
+      if (order) {
+        // Update order payment status to PAID
+        await prisma.order.update({
+          where: { id: order.id },
+          data: {
+            paymentStatus: "PAID",
+            status: "PROCESSING",
+          },
+        });
+      }
+    }
+
+    // Always respond 200 to PayMongo webhook
+    // If we return error — PayMongo will retry sending the webhook
+    res.status(200).json({ received: true });
+  } catch (error) {
+    console.error("Webhook error:", error.message);
+    res.status(400).json({
+      success: false,
+      message: "Webhook processing failed",
+    });
+  }
+};
+
 // ── GET MY ORDERS — BUYER ──────────────────────────────
+// Returns all orders placed by the currently logged-in buyer
 export const getMyOrders = async (req, res) => {
   const orders = await prisma.order.findMany({
     where: { buyerId: req.user.id },
@@ -192,6 +277,7 @@ export const getMyOrders = async (req, res) => {
         },
       },
     },
+    // Most recent orders appear first
     orderBy: { createdAt: "desc" },
   });
 
@@ -203,6 +289,8 @@ export const getMyOrders = async (req, res) => {
 };
 
 // ── GET SINGLE ORDER ───────────────────────────────────
+// Returns details of one specific order
+// Buyer can only view their own orders — security check included
 export const getOrder = async (req, res) => {
   const { id } = req.params;
 
@@ -237,7 +325,8 @@ export const getOrder = async (req, res) => {
     });
   }
 
-  // Buyer can only view their own orders
+  // Security check — buyer can only view their own orders
+  // Prevents buyers from accessing other buyers' order details
   if (order.buyerId !== req.user.id) {
     return res.status(403).json({
       success: false,
@@ -252,11 +341,13 @@ export const getOrder = async (req, res) => {
 };
 
 // ── GET ORDERS RECEIVED — SELLER ───────────────────────
-// Seller sees orders containing their products
+// Returns all orders that contain this seller's products
+// Seller only sees their own products within each order
 export const getSellerOrders = async (req, res) => {
   const orders = await prisma.order.findMany({
     where: {
       orderItems: {
+        // some = at least one order item belongs to this seller
         some: {
           product: {
             sellerId: req.user.id,
@@ -266,6 +357,7 @@ export const getSellerOrders = async (req, res) => {
     },
     include: {
       orderItems: {
+        // Only show this seller's items — not other sellers' items
         where: {
           product: {
             sellerId: req.user.id,
@@ -301,11 +393,13 @@ export const getSellerOrders = async (req, res) => {
 };
 
 // ── UPDATE ORDER STATUS — SELLER ───────────────────────
-// Seller updates order status — processing, fulfilled, cancelled
+// Seller updates the status of an order
+// If cancelled — stock is restored atomically
 export const updateOrderStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
+  // Only these statuses are allowed for seller updates
   const validStatuses = ["PROCESSING", "FULFILLED", "CANCELLED"];
 
   if (!validStatuses.includes(status)) {
@@ -315,6 +409,7 @@ export const updateOrderStatus = async (req, res) => {
     });
   }
 
+  // Find the order with its items
   const order = await prisma.order.findUnique({
     where: { id: parseInt(id) },
     include: {
@@ -333,7 +428,8 @@ export const updateOrderStatus = async (req, res) => {
     });
   }
 
-  // Verify this order contains seller's products
+  // Verify this order contains at least one of this seller's products
+  // Prevents sellers from updating other sellers' orders
   const isSellerOrder = order.orderItems.some(
     (item) => item.product.sellerId === req.user.id,
   );
@@ -345,12 +441,12 @@ export const updateOrderStatus = async (req, res) => {
     });
   }
 
-  // If cancelled — restore the stock
-  // This is important — pag na-cancel ang order
-  // kailangan ibalik ang stock para maibili ng iba
   if (status === "CANCELLED") {
+    // ── ATOMIC CANCELLATION ─────────────────────
+    // Restore stock AND update status in one transaction
+    // Both must succeed together or both fail
     await prisma.$transaction(async (tx) => {
-      // Restore stock for each item
+      // Restore stock for each cancelled item
       for (const item of order.orderItems) {
         await tx.product.update({
           where: { id: item.productId },
@@ -358,19 +454,21 @@ export const updateOrderStatus = async (req, res) => {
         });
       }
 
-      // Update order status
+      // Update order status to cancelled
       await tx.order.update({
         where: { id: parseInt(id) },
         data: { status: "CANCELLED" },
       });
     });
   } else {
+    // Simple status update — no stock changes needed
     await prisma.order.update({
       where: { id: parseInt(id) },
       data: { status },
     });
   }
 
+  // Fetch and return the updated order
   const updatedOrder = await prisma.order.findUnique({
     where: { id: parseInt(id) },
     include: {
@@ -388,5 +486,68 @@ export const updateOrderStatus = async (req, res) => {
     success: true,
     message: `Order status updated to ${status}`,
     data: updatedOrder,
+  });
+};
+
+// ── VERIFY PAYMENT STATUS — BUYER ──────────────────────
+// Fallback endpoint — buyer can manually check payment status
+// Used when webhook fails to deliver or buyer wants to confirm
+export const checkPaymentStatus = async (req, res) => {
+  const { id } = req.params;
+
+  // Find the order
+  const order = await prisma.order.findUnique({
+    where: { id: parseInt(id) },
+  });
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
+
+  // Security — buyer can only check their own orders
+  if (order.buyerId !== req.user.id) {
+    return res.status(403).json({
+      success: false,
+      message: "Not authorized to check this order",
+    });
+  }
+
+  // If already paid — just return current status
+  if (order.paymentStatus === "PAID") {
+    return res.status(200).json({
+      success: true,
+      message: "Payment already confirmed",
+      data: { paymentStatus: order.paymentStatus },
+    });
+  }
+
+  // If has PayMongo link — check status directly from PayMongo
+  if (order.paymongoLinkId) {
+    const paymongoStatus = await verifyPaymentStatus(order.paymongoLinkId);
+
+    // If PayMongo says paid — update our database
+    if (paymongoStatus === "paid") {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          paymentStatus: "PAID",
+          status: "PROCESSING",
+        },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment confirmed",
+        data: { paymentStatus: "PAID" },
+      });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { paymentStatus: order.paymentStatus },
   });
 };
