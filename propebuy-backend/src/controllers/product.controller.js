@@ -311,6 +311,13 @@ export const deleteProduct = async (req, res) => {
     });
   }
 
+  if (!product.isActive) {
+    return res.status(400).json({
+      success: false,
+      message: "Product is already deleted.",
+    });
+  }
+
   // Soft delete — set isActive to false
   // Hindi natin talaga dinelete para hindi masira ang order history
   await prisma.product.update({
