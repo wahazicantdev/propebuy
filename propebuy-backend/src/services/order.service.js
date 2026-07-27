@@ -1,4 +1,5 @@
 import prisma from "../config/prismaClient.js";
+import { cleanInt, cleanPrice } from "../utils/format.helper.js";
 import {
   createGCashPaymentLink,
   verifyPaymentStatus,
@@ -35,7 +36,7 @@ export const processCheckout = async (
       const lockedProduct = await tx.$queryRaw`
         SELECT id, name, stock, price
         FROM products
-        WHERE id = ${parseInt(productId)}
+        WHERE id = ${cleanInt(productId)}
         AND "isActive" = true
         FOR UPDATE
       `;
@@ -58,17 +59,17 @@ export const processCheckout = async (
       // ── ATOMIC STOCK DEDUCTION ────────────────────
       // decrement is atomic — safe against race conditions
       await tx.product.update({
-        where: { id: parseInt(productId) },
+        where: { id: cleanInt(productId) },
         data: { stock: { decrement: quantity } },
       });
 
-      const itemTotal = parseFloat(product.price) * quantity;
+      const itemTotal = cleanPrice(product.price) * quantity;
       totalAmount += itemTotal;
 
       validatedItems.push({
-        productId: parseInt(productId),
+        productId: cleanInt(productId),
         quantity,
-        price: parseFloat(product.price),
+        price: cleanPrice(product.price),
       });
     }
 
@@ -194,7 +195,7 @@ export const getBuyerOrders = async (buyerId) => {
 // Fetches one order by ID with full relations
 export const getOrderById = async (orderId) => {
   return await prisma.order.findUnique({
-    where: { id: parseInt(orderId) },
+    where: { id: cleanInt(orderId) },
     include: {
       orderItems: {
         include: {
@@ -242,7 +243,7 @@ export const getOrdersBySeller = async (sellerId) => {
 // Updates order status — restores stock if cancelled
 export const changeOrderStatus = async (orderId, status, sellerId) => {
   const order = await prisma.order.findUnique({
-    where: { id: parseInt(orderId) },
+    where: { id: cleanInt(orderId) },
     include: {
       orderItems: {
         include: { product: true },
@@ -271,20 +272,20 @@ export const changeOrderStatus = async (orderId, status, sellerId) => {
         });
       }
       await tx.order.update({
-        where: { id: parseInt(orderId) },
+        where: { id: cleanInt(orderId) },
         data: { status: "CANCELLED" },
       });
     });
   } else {
     await prisma.order.update({
-      where: { id: parseInt(orderId) },
+      where: { id: cleanInt(orderId) },
       data: { status },
     });
   }
 
   // Return updated order
   return await prisma.order.findUnique({
-    where: { id: parseInt(orderId) },
+    where: { id: cleanInt(orderId) },
     include: {
       orderItems: {
         include: {
@@ -299,7 +300,7 @@ export const changeOrderStatus = async (orderId, status, sellerId) => {
 // Verifies GCash payment — uses PayMongo as fallback
 export const confirmPaymentStatus = async (orderId) => {
   const order = await prisma.order.findUnique({
-    where: { id: parseInt(orderId) },
+    where: { id: cleanInt(orderId) },
   });
 
   if (!order) throw new Error("Order not found");

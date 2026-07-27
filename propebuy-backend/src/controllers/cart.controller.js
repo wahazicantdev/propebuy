@@ -1,4 +1,5 @@
 import prisma from "../config/prismaClient.js";
+import { cleanInt } from "../utils/format.helper.js";
 
 // In-memory cart is handled on the frontend
 // Backend cart validation happens at checkout
@@ -19,7 +20,7 @@ export const validateCartItem = async (req, res) => {
 
   const product = await prisma.product.findUnique({
     where: {
-      id: parseInt(productId),
+      id: cleanInt(productId),
       isActive: true,
     },
     include: {
@@ -46,7 +47,7 @@ export const validateCartItem = async (req, res) => {
     });
   }
 
-  if (product.stock < parseInt(quantity)) {
+  if (product.stock < cleanInt(quantity)) {
     return res.status(400).json({
       success: false,
       message: `Insufficient stock. Only ${product.stock} items available`,

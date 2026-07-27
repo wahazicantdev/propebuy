@@ -1,5 +1,6 @@
 import prisma from "../config/prismaClient.js";
 import { uploadToCloudinary } from "../config/cloudinary.js";
+import { cleanInt, cleanPrice } from "../utils/format.helper.js";
 
 // ── CREATE PRODUCT ─────────────────────────────────────
 // Seller only
@@ -41,11 +42,11 @@ export const createProduct = async (req, res) => {
     data: {
       sellerId: req.user.id,
       barangayId: req.user.barangayId,
-      categoryId: parseInt(categoryId),
+      categoryId: cleanInt(categoryId),
       name,
       description: description || null,
-      price: parseFloat(price),
-      stock: parseInt(stock),
+      price: cleanPrice(price),
+      stock: cleanInt(stock),
       imageUrl,
     },
     include: {
@@ -93,11 +94,11 @@ export const getProducts = async (req, res) => {
   };
 
   if (barangayId) {
-    where.barangayId = parseInt(barangayId);
+    where.barangayId = cleanInt(barangayId);
   }
 
   if (categoryId) {
-    where.categoryId = parseInt(categoryId);
+    where.categoryId = cleanInt(categoryId);
   }
 
   if (search) {
@@ -149,7 +150,7 @@ export const getProduct = async (req, res) => {
 
   const product = await prisma.product.findUnique({
     where: {
-      id: parseInt(id),
+      id: cleanInt(id),
       isActive: true,
     },
     include: {
@@ -235,7 +236,7 @@ export const updateProduct = async (req, res) => {
 
   // Check if product exists and belongs to this seller
   const product = await prisma.product.findUnique({
-    where: { id: parseInt(id) },
+    where: { id: cleanInt(id) },
   });
 
   if (!product) {
@@ -261,13 +262,13 @@ export const updateProduct = async (req, res) => {
   }
 
   const updatedProduct = await prisma.product.update({
-    where: { id: parseInt(id) },
+    where: { id: cleanInt(id) },
     data: {
       name: name || product.name,
       description: description || product.description,
-      price: price ? parseFloat(price) : product.price,
-      stock: stock ? parseInt(stock) : product.stock,
-      categoryId: categoryId ? parseInt(categoryId) : product.categoryId,
+      price: price ? cleanPrice(price) : product.price,
+      stock: stock ? cleanInt(stock) : product.stock,
+      categoryId: categoryId ? cleanInts(categoryId) : product.categoryId,
       imageUrl,
     },
     include: {
@@ -294,7 +295,7 @@ export const deleteProduct = async (req, res) => {
 
   // Check if product exists and belongs to this seller
   const product = await prisma.product.findUnique({
-    where: { id: parseInt(id) },
+    where: { id: cleanInt(id) },
   });
 
   if (!product) {
@@ -321,7 +322,7 @@ export const deleteProduct = async (req, res) => {
   // Soft delete — set isActive to false
   // Hindi natin talaga dinelete para hindi masira ang order history
   await prisma.product.update({
-    where: { id: parseInt(id) },
+    where: { id: cleanInt(id) },
     data: { isActive: false },
   });
 
