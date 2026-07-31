@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
@@ -50,6 +51,32 @@ async function main() {
   }
 
   console.log("Seeding complete! Barangays and categories are ready.");
+
+  // ── SEED ADMIN ACCOUNT ───────────────────────────
+  // Creates the default PropeBuy admin account
+  // Password is hashed properly using bcrypt
+  const adminPassword = "admin123";
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash(adminPassword, salt);
+
+  await prisma.user.upsert({
+    where: { email: "admin@propebuy.com" },
+    update: {},
+    create: {
+      name: "PropeBuy Admin",
+      email: "admin@propebuy.com",
+      password: hashedPassword,
+      role: "ADMIN",
+      accountStatus: "VERIFIED",
+    },
+  });
+
+  console.log(
+    "Seeding complete! Barangays, categories, and admin account ready.",
+  );
+  console.log("Admin credentials:");
+  console.log("  Email    → admin@propebuy.com");
+  console.log("  Password → admin123");
 }
 
 main()
