@@ -1,6 +1,8 @@
 import prisma from "../config/prismaClient.js";
 import { uploadToCloudinary } from "../config/cloudinary.js";
 import { cleanInt, cleanPrice } from "../utils/format.helper.js";
+import { notifyLowStock } from "../utils/notification.helper.js";
+import { checkLowStock } from "../utils/checkLowStock.helper.js";
 
 // ── CREATE PRODUCT ─────────────────────────────────────
 // Seller only
@@ -71,6 +73,9 @@ export const createProduct = async (req, res) => {
       },
     },
   });
+
+  // Check if initial stock is already low — notify seller
+  await checkLowStock(product.id, req.user.id);
 
   res.status(201).json({
     success: true,
@@ -280,6 +285,9 @@ export const updateProduct = async (req, res) => {
       },
     },
   });
+
+  // Check if updated stock is low — notify seller
+  await checkLowStock(updatedProduct.id, req.user.id);
 
   res.status(200).json({
     success: true,

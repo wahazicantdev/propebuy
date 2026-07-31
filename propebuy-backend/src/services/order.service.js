@@ -4,6 +4,10 @@ import {
   createGCashPaymentLink,
   verifyPaymentStatus,
 } from "../utils/paymongo.helper.js";
+import {
+  notifyOrderStatus,
+  notifyPaymentConfirmed,
+} from "../utils/notification.helper.js";
 
 // ── CHECKOUT SERVICE ───────────────────────────────────
 // Contains the full TPS logic and PayMongo integration
@@ -138,34 +142,6 @@ export const processCheckout = async (
   return { order, paymentUrl: null };
 };
 
-// ── HANDLE WEBHOOK SERVICE ─────────────────────────────
-// Processes PayMongo webhook events
-export const processWebhookEvent = async (event) => {
-  const eventType = event.data?.attributes?.type;
-
-  // Only process successful payment events
-  if (eventType === "payment.paid" || eventType === "link.payment.paid") {
-    // Find pending order with a PayMongo link
-    const order = await prisma.order.findFirst({
-      where: {
-        paymongoLinkId: { not: null },
-        paymentStatus: "PENDING",
-      },
-    });
-
-    if (order) {
-      // Mark order as paid and move to processing
-      await prisma.order.update({
-        where: { id: order.id },
-        data: {
-          paymentStatus: "PAID",
-          status: "PROCESSING",
-        },
-      });
-    }
-  }
-};
-
 // ── GET BUYER ORDERS SERVICE ───────────────────────────
 // Fetches all orders for a specific buyer
 export const getBuyerOrders = async (buyerId) => {
@@ -283,6 +259,17 @@ export const changeOrderStatus = async (orderId, status, sellerId) => {
     });
   }
 
+  // ── REAL-TIME NOTIFICATION TO BUYER ───────────────
+  // After status update — push notification to buyer via Socket.io
+  // Buyer's page updates automatically without refresh
+  const statusMessages = {
+    PROCESSING: "Your order is now being processed by the seller",
+    FULFILLED: "Your order has been fulfilled and is ready",
+    CANCELLED: "Your order has been cancelled",
+  };
+
+  notifyOrderStatus(order.buyerId, order.id, status, statusMessages[status]);
+
   // Return updated order
   return await prisma.order.findUnique({
     where: { id: cleanInt(orderId) },
@@ -320,9 +307,41 @@ export const confirmPaymentStatus = async (orderId) => {
         where: { id: order.id },
         data: { paymentStatus: "PAID", status: "PROCESSING" },
       });
+
+      // ── REAL-TIME PAYMENT NOTIFICATION ───────────
+      // Notify buyer that their GCash payment is confirmed
+      notifyPaymentConfirmed(order.buyerId, order.id);
+
       return { paymentStatus: "PAID", updated: true };
     }
   }
 
   return { paymentStatus: order.paymentStatus, updated: false };
+};
+
+// ── PROCESS WEBHOOK EVENT SERVICE ─────────────────────
+export const processWebhookEvent = async (event) => {
+  const eventType = event.data?.attributes?.type;
+
+  if (eventType === "payment.paid" || eventType === "link.payment.paid") {
+    const order = await prisma.order.findFirst({
+      where: {
+        paymongoLinkId: { not: null },
+        paymentStatus: "PENDING",
+      },
+    });
+
+    if (order) {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          paymentStatus: "PAID",
+          status: "PROCESSING",
+        },
+      });
+
+      // Real-time notification to buyer on payment confirmation
+      notifyPaymentConfirmed(order.buyerId, order.id);
+    }
+  }
 };
