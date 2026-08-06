@@ -1,3 +1,4 @@
+import prisma from "../config/prismaClient.js";
 // Low stock threshold — notify seller when stock hits this number
 const LOW_STOCK_THRESHOLD = 3;
 
