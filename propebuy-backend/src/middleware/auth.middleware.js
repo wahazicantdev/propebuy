@@ -22,24 +22,49 @@ export const protect = async (req, res, next) => {
     });
   }
 
-  // Verify token
-  const decoded = jwt.verify(token, JWT_SECRET);
+  try {
+    // verify the token to jwt secret to make sure its authentic
+    const decoded = jwt.verify(token, JWT_SECRET);
 
-  // Find user from decoded token
-  const user = await prisma.user.findUnique({
-    where: { id: decoded.id },
-  });
+    // find the user hold by this token
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+    });
 
-  if (!user) {
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Not authorized — user not found",
+      });
+    }
+
+    // attach whole user data, not just userId
+    req.user = user;
+    // Token and user are valid, continue to protected route.
+    next();
+  } catch (error) {
+    // Token expired — specific message
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message: "Token expired — please login again",
+      });
+    }
+
+    // Token invalid — tampered or malformed
+    if (error.name === "JsonWebTokenError") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token — please login again",
+      });
+    }
+
+    // Any other error
     return res.status(401).json({
       success: false,
-      message: "Not authorized — user not found",
+      message: "Not authorized",
     });
   }
-
-  // Attach user to request
-  req.user = user;
-  next();
 };
 
 // ── ROLE CHECK ─────────────────────────────────────────
