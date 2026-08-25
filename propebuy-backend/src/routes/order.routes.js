@@ -10,6 +10,10 @@ import {
 } from "../controllers/order.controller.js";
 import { validateCartItem } from "../controllers/cart.controller.js";
 import { protect, authorize } from "../middleware/auth.middleware.js";
+import {
+  validateCheckout,
+  validateIdParam,
+} from "../middleware/validate.middleware.js";
 
 const orderRoutes = Router();
 
@@ -29,7 +33,13 @@ orderRoutes.post(
 );
 
 // ── CHECKOUT — TPS ─────────────────────────────────────
-orderRoutes.post("/checkout", protect, authorize("BUYER"), checkout);
+orderRoutes.post(
+  "/checkout",
+  protect,
+  authorize("BUYER"),
+  validateCheckout,
+  checkout,
+);
 
 // ── BUYER ORDER ROUTES ─────────────────────────────────
 orderRoutes.get("/my-orders", protect, authorize("BUYER"), getMyOrders);
@@ -39,10 +49,11 @@ orderRoutes.get(
   "/:id/payment-status",
   protect,
   authorize("BUYER"),
+  validateIdParam,
   checkPaymentStatus,
 );
 
-orderRoutes.get("/:id", protect, getOrder);
+orderRoutes.get("/:id", protect, validateIdParam, getOrder);
 
 // ── SELLER ORDER ROUTES ────────────────────────────────
 orderRoutes.get(
@@ -52,6 +63,12 @@ orderRoutes.get(
   getSellerOrders,
 );
 
-orderRoutes.put("/:id/status", protect, authorize("SELLER"), updateOrderStatus);
+orderRoutes.put(
+  "/:id/status",
+  protect,
+  authorize("SELLER"),
+  validateIdParam,
+  updateOrderStatus,
+);
 
 export default orderRoutes;

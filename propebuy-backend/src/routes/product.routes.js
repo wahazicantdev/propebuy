@@ -11,6 +11,11 @@ import {
 } from "../controllers/product.controller.js";
 import { protect, authorize } from "../middleware/auth.middleware.js";
 import { upload } from "../config/cloudinary.js";
+import {
+  validateCreateProduct,
+  validateUpdateProduct,
+  validateIdParam,
+} from "../middleware/validate.middleware.js";
 
 const productRoutes = Router();
 
@@ -19,7 +24,7 @@ const productRoutes = Router();
 productRoutes.get("/", getProducts);
 productRoutes.get("/barangays", getBarangays);
 productRoutes.get("/categories", getCategories);
-productRoutes.get("/:id", getProduct);
+productRoutes.get("/:id", validateIdParam, getProduct);
 
 // ── PROTECTED ROUTES — SELLER ONLY ────────────────────
 // Token required + must be SELLER role
@@ -28,6 +33,7 @@ productRoutes.post(
   protect,
   authorize("SELLER"),
   upload.single("image"),
+  validateCreateProduct,
   createProduct,
 );
 
@@ -43,6 +49,7 @@ productRoutes.put(
   protect,
   authorize("SELLER"),
   upload.single("image"),
+  validateUpdateProduct,
   updateProduct,
 );
 

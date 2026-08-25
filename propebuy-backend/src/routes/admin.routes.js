@@ -14,6 +14,12 @@ import {
   toggleCategory,
 } from "../controllers/admin.controller.js";
 import { protect, authorize } from "../middleware/auth.middleware.js";
+import {
+  validateVerifyUser,
+  validateAddBarangay,
+  validateAddCategory,
+  validateIdParam,
+} from "../middleware/validate.middleware.js";
 
 const adminRoutes = Router();
 
@@ -27,7 +33,13 @@ const adminRoutes = Router();
 adminRoutes.get("/users", protect, authorize("ADMIN"), getAllUsers);
 
 // Get single user details with their documents
-adminRoutes.get("/users/:id", protect, authorize("ADMIN"), getUser);
+adminRoutes.get(
+  "/users/:id",
+  protect,
+  authorize("ADMIN"),
+  validateIdParam,
+  getUser,
+);
 
 // Get all pending verification requests
 adminRoutes.get(
@@ -39,10 +51,23 @@ adminRoutes.get(
 
 // ── APPROVE or REJECT a USER REGISTRATION ───────────────────────────────────
 // Body: { action: "approve" | "reject", barangayId: number }
-adminRoutes.put("/users/:id/verify", protect, authorize("ADMIN"), verifyUser);
+adminRoutes.put(
+  "/users/:id/verify",
+  protect,
+  authorize("ADMIN"),
+  validateIdParam,
+  validateVerifyUser,
+  verifyUser,
+);
 
 // Suspend a user account
-adminRoutes.put("/users/:id/suspend", protect, authorize("ADMIN"), suspendUser);
+adminRoutes.put(
+  "/users/:id/suspend",
+  protect,
+  authorize("ADMIN"),
+  validateIdParam,
+  suspendUser,
+);
 
 // ── PRODUCT MODERATION ─────────────────────────────────
 // Get all products — including inactive ones
@@ -53,6 +78,7 @@ adminRoutes.put(
   "/products/:id/remove",
   protect,
   authorize("ADMIN"),
+  validateIdParam,
   removeProduct,
 );
 
@@ -62,25 +88,39 @@ adminRoutes.get("/orders", protect, authorize("ADMIN"), getAllOrders);
 
 // ── BARANGAY MANAGEMENT ────────────────────────────────
 // Add new barangay — body: { name: string, city: string }
-adminRoutes.post("/barangays", protect, authorize("ADMIN"), addBarangay);
+adminRoutes.post(
+  "/barangays",
+  protect,
+  authorize("ADMIN"),
+  validateAddBarangay,
+  addBarangay,
+);
 
 // Toggle barangay active status
 adminRoutes.put(
   "/barangays/:id/toggle",
   protect,
   authorize("ADMIN"),
+  validateIdParam,
   toggleBarangay,
 );
 
 // ── CATEGORY MANAGEMENT ────────────────────────────────
 // Add new category — body: { name: string }
-adminRoutes.post("/categories", protect, authorize("ADMIN"), addCategory);
+adminRoutes.post(
+  "/categories",
+  protect,
+  authorize("ADMIN"),
+  validateAddCategory,
+  addCategory,
+);
 
 // Toggle category active status
 adminRoutes.put(
   "/categories/:id/toggle",
   protect,
   authorize("ADMIN"),
+  validateIdParam,
   toggleCategory,
 );
 
