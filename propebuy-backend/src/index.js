@@ -3,6 +3,8 @@ import cors from "cors";
 import "express-async-errors";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 // Imported config/middleware
 import { CLIENT_URL, PORT } from "./config/env.js";
 import { errorHandler } from "./middleware/error.middleware.js";
@@ -53,7 +55,48 @@ io.on("connection", (socket) => {
   });
 });
 
-// Middleware
+// ── SECURITY MIDDLEWARE ────────────────────────────────
+
+// Helmet — sets secure HTTP headers on every response
+// Protects against XSS, clickjacking, MIME sniffing attacks
+// Must be one of the first middleware — applies to all routes
+app.use(helmet());
+
+// ── RATE LIMITERS ──────────────────────────────────────
+
+// General rate limiter — applies to all API routes
+// Allows 100 requests per 15 minutes per IP address
+// Prevents general API abuse and scraping
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes in milliseconds
+  max: 100, // max requests per window per IP
+  message: {
+    success: false,
+    message: "Too many requests — please try again after 15 minutes",
+  },
+  // standardHeaders — returns rate limit info in response headers
+  // X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
+  standardHeaders: true,
+  // legacyHeaders — disables old X-RateLimit headers
+  legacyHeaders: false,
+});
+
+// Auth rate limiter — stricter limit for login and register
+// Allows only 10 requests per 15 minutes per IP address
+// Prevents brute-force password attacks
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // only 10 auth attempts per window
+  message: {
+    success: false,
+    message:
+      "Too many authentication attempts — please try again after 15 minutes",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ── STANDARD MIDDLEWARE ────────────────────────────────
 app.use(
   cors({
     origin: CLIENT_URL,
@@ -64,8 +107,8 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use("/api/auth", authRoutes);
+// ── ROUTES ─────────────────────────────────────────────
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/analytics", analyticsRoutes);
