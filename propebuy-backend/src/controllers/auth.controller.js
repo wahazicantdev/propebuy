@@ -3,8 +3,15 @@ import jwt from "jsonwebtoken";
 import prisma from "../config/prismaClient.js";
 import { uploadToCloudinary } from "../config/cloudinary.js";
 import { JWT_SECRET, JWT_EXPIRES_IN } from "../config/env.js";
+import {
+  extractTextFromImage,
+  extractIDFields,
+  extractCertificateFields,
+  crossCheckDocuments,
+  isCertificateRecent,
+} from "../utils/ocr.helper.js";
 
-// ── REGISTER ──────────────────────────────────────────
+// ── REGISTER ───────────────────────────────────────────
 export const register = async (req, res) => {
   const { name, email, password, role, barangayId } = req.body;
 
@@ -16,7 +23,6 @@ export const register = async (req, res) => {
     });
   }
 
-  // Validate role
   if (!["BUYER", "SELLER"].includes(role)) {
     return res.status(400).json({
       success: false,
@@ -44,23 +50,85 @@ export const register = async (req, res) => {
     });
   }
 
-  // Upload both documents to Cloudinary manually
-  // uploadToCloudinary takes the file buffer from memory storage
-  const idUpload = await uploadToCloudinary(
-    req.files.idDocument[0].buffer,
-    "documents",
+  // Get document buffers from multer memory storage
+  const idBuffer = req.files.idDocument[0].buffer;
+  const certBuffer = req.files.certDocument[0].buffer;
+
+  // ── UPLOAD DOCUMENTS TO CLOUDINARY ────────────────
+  // Upload first — we need URLs regardless of OCR result
+  const [idUpload, certUpload] = await Promise.all([
+    uploadToCloudinary(idBuffer, "documents"),
+    uploadToCloudinary(certBuffer, "documents"),
+  ]);
+
+  // ── RUN OCR ON BOTH DOCUMENTS ──────────────────────
+  // Extract text from both uploaded images simultaneously
+  // Promise.all runs both OCR operations at the same time
+  // Much faster than running them one after the other
+  console.log("Running OCR on uploaded documents...");
+
+  const [idOCR, certOCR] = await Promise.all([
+    extractTextFromImage(idBuffer),
+    extractTextFromImage(certBuffer),
+  ]);
+
+  console.log("ID OCR confidence:", idOCR.confidence);
+  console.log("Certificate OCR confidence:", certOCR.confidence);
+  console.log("ID extracted text:", idOCR.text.slice(0, 200)); // log first 200 chars
+
+  // ── EXTRACT STRUCTURED FIELDS FROM OCR TEXT ────────
+  const idFields = extractIDFields(idOCR.text);
+  const certFields = extractCertificateFields(certOCR.text);
+
+  console.log("Extracted ID fields:", idFields);
+  console.log("Extracted certificate fields:", certFields);
+
+  // ── CROSS-CHECK DOCUMENTS ──────────────────────────
+  // Compare extracted data — determine verification result
+  // Use claimed barangay from registration form
+  // If no barangayId provided — use empty string
+  const barangay = barangayId
+    ? await prisma.barangay.findUnique({
+        where: { id: parseInt(barangayId) },
+        select: { name: true },
+      })
+    : null;
+
+  const verificationResult = crossCheckDocuments(
+    idFields,
+    certFields,
+    barangay?.name || "",
   );
 
-  const certUpload = await uploadToCloudinary(
-    req.files.certDocument[0].buffer,
-    "documents",
-  );
+  // ── CHECK CERTIFICATE RECENCY ──────────────────────
+  const isRecent = isCertificateRecent(certFields.dateIssued);
+  if (isRecent === false) {
+    // Certificate is older than 6 months
+    // Downgrade result to MANUAL_REVIEW if it was AUTO_APPROVED
+    if (verificationResult.result === "AUTO_APPROVED") {
+      verificationResult.result = "MANUAL_REVIEW";
+      verificationResult.issues.push(
+        "Barangay Certificate may be outdated — issued more than 6 months ago",
+      );
+    }
+  }
+
+  // ── DETERMINE ACCOUNT STATUS BASED ON OCR RESULT ──
+  // AUTO_APPROVED → account immediately VERIFIED
+  // MANUAL_REVIEW → account stays PENDING — admin reviews
+  // AUTO_REJECTED → account immediately REJECTED
+  const accountStatus =
+    verificationResult.result === "AUTO_APPROVED"
+      ? "VERIFIED"
+      : verificationResult.result === "AUTO_REJECTED"
+        ? "REJECTED"
+        : "PENDING"; // MANUAL_REVIEW
 
   // Hash password
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
 
-  // Create user in database
+  // ── CREATE USER WITH OCR RESULTS ──────────────────
   const user = await prisma.user.create({
     data: {
       name,
@@ -70,19 +138,44 @@ export const register = async (req, res) => {
       barangayId: barangayId ? parseInt(barangayId) : null,
       idDocumentUrl: idUpload.secure_url,
       certDocumentUrl: certUpload.secure_url,
-      accountStatus: "PENDING",
+      accountStatus,
+
+      // Store OCR results for admin reference
+      // Even if auto-approved — admin can still review these
+      ocrResult: verificationResult.result,
+      ocrConfidence: verificationResult.confidence,
+
+      // Store issues as JSON string — Prisma doesn't support arrays
+      // Admin portal will parse and display these
+      ocrIssues: JSON.stringify(verificationResult.issues),
+
+      // Store extracted data as JSON string for admin reference
+      ocrExtractedData: JSON.stringify(verificationResult.extractedData),
     },
   });
 
-  // Generate JWT token
+  // ── GENERATE JWT TOKEN ─────────────────────────────
   const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
 
+  // ── BUILD RESPONSE MESSAGE ─────────────────────────
+  // Different message based on OCR result
+  // So user knows what to expect
+  const messages = {
+    VERIFIED:
+      "Registration successful. Your account has been automatically verified. You can now access PropeBuy.",
+    REJECTED:
+      "Registration failed. Your documents could not be verified. Please ensure you submit valid and matching documents.",
+    PENDING:
+      "Registration successful. Your documents are pending manual review by our administrators. You will be notified once verified.",
+  };
+
   res.status(201).json({
     success: true,
-    message:
-      "Registration successful. Your account is pending admin verification.",
+    message: messages[accountStatus],
+    ocrResult: verificationResult.result,
+    ocrConfidence: verificationResult.confidence,
     token,
     data: {
       id: user.id,
@@ -154,6 +247,8 @@ export const getMe = async (req, res) => {
       role: true,
       accountStatus: true,
       barangayId: true,
+      ocrResult: true,
+      ocrConfidence: true,
       createdAt: true,
     },
   });
