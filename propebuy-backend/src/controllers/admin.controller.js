@@ -4,39 +4,50 @@ import { notifyOrderStatus } from "../utils/notification.helper.js";
 // ── GET ALL PENDING VERIFICATIONS ──────────────────────
 // Returns all users with PENDING account status
 // These are users who registered but not yet reviewed by admin
+// Now includes OCR results for admin to review
 export const getPendingVerifications = async (req, res) => {
-  // Find all users waiting for verification
-  // Include their barangay info for display
   const pendingUsers = await prisma.user.findMany({
     where: {
-      // Only get users with PENDING status
+      // Show both PENDING (manual review needed) accounts
+      // AUTO_REJECTED can be reviewed too in case of OCR error
       accountStatus: "PENDING",
     },
     select: {
-      // Only return safe fields — never return password
       id: true,
       name: true,
       email: true,
       role: true,
       accountStatus: true,
-      idDocumentUrl: true, // URL of uploaded government ID
-      certDocumentUrl: true, // URL of uploaded barangay certificate
+      idDocumentUrl: true,
+      certDocumentUrl: true,
       createdAt: true,
+
+      // OCR fields — admin uses these to make faster decisions
+      ocrResult: true, // what OCR decided
+      ocrConfidence: true, // how confident OCR was
+      ocrIssues: true, // what problems OCR found
+      ocrExtractedData: true, // what OCR extracted from documents
+
       barangay: {
-        select: {
-          id: true,
-          name: true,
-        },
+        select: { id: true, name: true },
       },
     },
-    // Show newest registrations first
     orderBy: { createdAt: "desc" },
   });
 
+  // Parse JSON strings back to objects for cleaner response
+  const parsedUsers = pendingUsers.map((user) => ({
+    ...user,
+    ocrIssues: user.ocrIssues ? JSON.parse(user.ocrIssues) : [],
+    ocrExtractedData: user.ocrExtractedData
+      ? JSON.parse(user.ocrExtractedData)
+      : null,
+  }));
+
   res.status(200).json({
     success: true,
-    count: pendingUsers.length,
-    data: pendingUsers,
+    count: parsedUsers.length,
+    data: parsedUsers,
   });
 };
 
