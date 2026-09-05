@@ -12,6 +12,7 @@ import {
   toggleBarangay,
   addCategory,
   toggleCategory,
+  rerunOCR,
 } from "../controllers/admin.controller.js";
 import { protect, authorize } from "../middleware/auth.middleware.js";
 import {
@@ -50,6 +51,15 @@ adminRoutes.get(
 );
 
 // ── APPROVE or REJECT a USER REGISTRATION ───────────────────────────────────
+// Admin manually triggers OCR re-run on a user's documents
+adminRoutes.post(
+  "/users/:id/ocr-rerun",
+  protect,
+  authorize("ADMIN"),
+  validateIdParam,
+  rerunOCR,
+);
+
 // Body: { action: "approve" | "reject", barangayId: number }
 adminRoutes.put(
   "/users/:id/verify",

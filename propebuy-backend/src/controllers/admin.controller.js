@@ -1,5 +1,92 @@
 import prisma from "../config/prismaClient.js";
 import { notifyOrderStatus } from "../utils/notification.helper.js";
+import {
+  extractTextFromImage,
+  extractIDFields,
+  extractCertificateFields,
+  crossCheckDocuments,
+} from "../utils/ocr.helper.js";
+import axios from "axios";
+
+// ── RE-RUN OCR ON USER DOCUMENTS ──────────────────────
+// Admin can manually trigger OCR re-run
+// Useful when initial OCR had poor quality
+// or documents were resubmitted
+export const rerunOCR = async (req, res) => {
+  const { id } = req.params;
+
+  const user = await prisma.user.findUnique({
+    where: { id: parseInt(id) },
+    select: {
+      id: true,
+      idDocumentUrl: true,
+      certDocumentUrl: true,
+      barangay: { select: { name: true } },
+    },
+  });
+
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  if (!user.idDocumentUrl || !user.certDocumentUrl) {
+    return res.status(400).json({
+      success: false,
+      message: "User has no uploaded documents to re-analyze",
+    });
+  }
+
+  // Download images from Cloudinary for re-processing
+  // We fetch them as buffers for Tesseract
+  const [idResponse, certResponse] = await Promise.all([
+    axios.get(user.idDocumentUrl, { responseType: "arraybuffer" }),
+    axios.get(user.certDocumentUrl, { responseType: "arraybuffer" }),
+  ]);
+
+  const idBuffer = Buffer.from(idResponse.data);
+  const certBuffer = Buffer.from(certResponse.data);
+
+  // Re-run OCR on both documents
+  const [idOCR, certOCR] = await Promise.all([
+    extractTextFromImage(idBuffer),
+    extractTextFromImage(certBuffer),
+  ]);
+
+  const idFields = extractIDFields(idOCR.text);
+  const certFields = extractCertificateFields(certOCR.text);
+
+  const verificationResult = crossCheckDocuments(
+    idFields,
+    certFields,
+    user.barangay?.name || "",
+  );
+
+  // Update user with new OCR results
+  await prisma.user.update({
+    where: { id: parseInt(id) },
+    data: {
+      ocrResult: verificationResult.result,
+      ocrConfidence: verificationResult.confidence,
+      ocrIssues: JSON.stringify(verificationResult.issues),
+      ocrExtractedData: JSON.stringify(verificationResult.extractedData),
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    message: "OCR re-run completed",
+    data: {
+      userId: user.id,
+      ocrResult: verificationResult.result,
+      ocrConfidence: verificationResult.confidence,
+      issues: verificationResult.issues,
+      extractedData: verificationResult.extractedData,
+    },
+  });
+};
 
 // ── GET ALL PENDING VERIFICATIONS ──────────────────────
 // Returns all users with PENDING account status
