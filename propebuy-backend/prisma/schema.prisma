@@ -17,6 +17,14 @@ model User {
   barangayId      Int?
   idDocumentUrl   String?
   certDocumentUrl String?
+
+  // OCR verification fields
+  // Stores the result of automated document verification
+  ocrResult         String?       // AUTO_APPROVED, MANUAL_REVIEW, AUTO_REJECTED
+  ocrConfidence     Float?        // confidence score 0-100
+  ocrIssues         String?       // JSON string of issues found during OCR
+  ocrExtractedData  String?       // JSON string of extracted fields from documents
+
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   orders          Order[]
